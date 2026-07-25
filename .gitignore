@@ -1,0 +1,8 @@
+.venv/
+.vscode/
+__pycache__/
+*.py[cod]
+credentials.json
+token.json
+downloaded_google_photos/
+*.log
