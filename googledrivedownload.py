@@ -1,7 +1,8 @@
+import argparse
+import hashlib
 import io
 import os
 import re
-import argparse
 from pathlib import Path
 from typing import List, Optional
 
@@ -59,7 +60,7 @@ def get_drive_service(token_path: Path, client_secret_path: Path):
     return build("drive", "v3", credentials=creds)
 
 
-def list_drive_items(service, query: str, fields: str = "files(id, name, mimeType)", page_size: int = 1000):
+def list_drive_items(service, query: str, fields: str = "files(id, name, mimeType, md5Checksum)", page_size: int = 1000):
     items = []
     page_token = None
 
@@ -102,6 +103,32 @@ def find_folder(service, folder_name: str):
 
 def is_image_file(name: str) -> bool:
     return Path(name).suffix.lower() in IMAGE_EXTENSIONS
+
+
+def build_existing_hash_index(output_dir: Path) -> dict:
+    hash_index = {}
+    if not output_dir.exists():
+        return hash_index
+
+    for path in output_dir.rglob("*"):
+        if not path.is_file():
+            continue
+
+        try:
+            digest = hashlib.md5(path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+
+        if digest not in hash_index:
+            hash_index[digest] = path
+
+    return hash_index
+
+
+def find_matching_local_file(existing_hash_index: dict, md5_checksum: Optional[str]) -> Optional[Path]:
+    if not md5_checksum:
+        return None
+    return existing_hash_index.get(md5_checksum)
 
 
 def sanitize_name(name: str) -> str:
@@ -151,9 +178,17 @@ def download_file(service, file_id: str, destination: Path):
     destination.write_bytes(fh.getvalue())
 
 
-def download_folder_tree(service, folder_id: str, output_dir: Path, relative_parts: Optional[List[str]] = None):
+def download_folder_tree(
+    service,
+    folder_id: str,
+    output_dir: Path,
+    relative_parts: Optional[List[str]] = None,
+    existing_hash_index: Optional[dict] = None,
+):
     if relative_parts is None:
         relative_parts = []
+    if existing_hash_index is None:
+        existing_hash_index = {}
 
     query = f"'{folder_id}' in parents and trashed = false"
     items = list_drive_items(service, query)
@@ -161,10 +196,18 @@ def download_folder_tree(service, folder_id: str, output_dir: Path, relative_par
         item_name = item["name"]
         if item.get("mimeType") == "application/vnd.google-apps.folder":
             next_parts = relative_parts + [item_name]
-            download_folder_tree(service, item["id"], output_dir, next_parts)
+            download_folder_tree(service, item["id"], output_dir, next_parts, existing_hash_index)
         elif is_image_file(item_name):
+            md5_checksum = item.get("md5Checksum")
+            matching_path = find_matching_local_file(existing_hash_index, md5_checksum)
+            if matching_path:
+                print(f"Skipped existing: {matching_path}")
+                continue
+
             destination = build_destination_path(output_dir, item_name, relative_parts)
             download_file(service, item["id"], destination)
+            if md5_checksum:
+                existing_hash_index[md5_checksum] = destination
             print(f"Downloaded: {destination}")
 
 
@@ -190,7 +233,8 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Downloading images from folder '{args.folder_name}' into {output_dir}")
-    download_folder_tree(service, folder_id, output_dir)
+    existing_hash_index = build_existing_hash_index(output_dir)
+    download_folder_tree(service, folder_id, output_dir, existing_hash_index=existing_hash_index)
     print("Finished.")
 
 

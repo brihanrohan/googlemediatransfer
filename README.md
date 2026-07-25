@@ -53,6 +53,7 @@ By default, files are downloaded into:
 ## Notes
 
 - The script only downloads common image extensions such as `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.webp`, `.tif`, `.tiff`, `.heic`, and `.heif`.
+- If you run the script again, it will check the MD5 hash of each image already present in the output folder and skip downloading files that match, so it does not re-download everything.
 - If you want to change the folder name or output directory, use:
 
 ```bash
